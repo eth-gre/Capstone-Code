@@ -18,6 +18,11 @@ df_personal_information = read.csv("data/upd4_hh_b.csv")
 df_location = read.csv("data/upd4_hh_a.csv")
 df_expenditure = read.csv("data/upd4_hh_l.csv")
 
+df_assets = read.csv("data/upd4_hh_m.csv")
+df_assets <- df_assets %>% filter(round == TARGET_ROUND)
+
+
+
 
 # === Extract the columns we actually want
 
@@ -70,6 +75,8 @@ df_expenditure <- df_expenditure %>% group_by(UPHI, round, r_hhid) %>% mutate(to
 df_expenditure <- df_expenditure %>% select(UPHI, round, r_hhid, total_expenses)
 df_expenditure <- df_expenditure %>% mutate(total_expenses = total_expenses / 1000)
 
+# Normalise education cost too
+df_individual_education <- df_individual_education %>% mutate(educ_cost = educ_cost / 1000)
 
 
 # === Filter the data down
@@ -99,6 +106,9 @@ df <- df %>% filter(is_female == 1)
 
 df <- distinct(df)
 
+
+# Compute the final derived net educ column
+df <- df %>% mutate(expenses_net_educ = total_expenses - educ_cost)
 
 
 # === Simple OLS regression
