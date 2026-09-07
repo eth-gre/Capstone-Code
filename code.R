@@ -61,15 +61,15 @@ educ_years_map <- c(
 df_individual_education$years_educ <- educ_years_map[df_individual_education$grade_label]
 
 # Map variables to a 1 or 0
-df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE'))
-df_personal_information <- df_personal_information %>% mutate(is_polygamous = as.integer(marriage_label == 'POLYGAMOUS MARRIED'))
+df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE')) %>% 
+                                                       mutate(is_polygamous = as.integer(marriage_label == 'POLYGAMOUS MARRIED'))
+
 df_location <- df_location %>% mutate(is_urban = as.integer(urban_label == 'URBAN'))
 
 # For household expenditure, group and sum (then drop the individual expenses to help with the merge)
-df_expenditure <- df_expenditure %>% group_by(UPHI, round, r_hhid) %>% mutate(total_expenses = sum(expense, na.rm = TRUE)) %>% ungroup()
-df_expenditure <- df_expenditure %>% select(UPHI, round, r_hhid, total_expenses)
-df_expenditure <- df_expenditure %>% mutate(total_expenses = total_expenses / 1000)
-
+df_expenditure <- df_expenditure %>% group_by(UPHI, round, r_hhid) %>% mutate(total_expenses = sum(expense, na.rm = TRUE)) %>% ungroup() %>% 
+                                     select(UPHI, round, r_hhid, total_expenses) %>% 
+                                     mutate(total_expenses = total_expenses / 1000)
 
 
 # === Filter the data down
@@ -84,18 +84,17 @@ df_individual_education <- df_individual_education %>% filter(round == TARGET_RO
 df_individual_education <- df_individual_education %>% filter(!years_educ == 'NA')
 
 
-
 # === Merge all of the CSVs together (on an individual level)
-df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id"))
-df <- df %>% left_join(df_personal_information, by = c("round", "r_hhid", "r_id"))
-df <- df %>% left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
-df <- df %>% left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
+df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id")) %>% 
+                                  left_join(df_personal_information, by = c("round", "r_hhid", "r_id")) %>% 
+                                  left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
+                                  left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
 
 
 # Then kill off all the rows that didn't merge or are unwanted
-df <- df %>% filter(!supports_violence == 'NA')
-df <- df %>% filter(!is.na(total_expenses) & total_expenses > 0)
-df <- df %>% filter(is_female == 1)
+df <- df %>% filter(!supports_violence == 'NA') %>% 
+             filter(!is.na(total_expenses) & total_expenses > 0) %>% 
+             filter(is_female == 1)
 
 df <- distinct(df)
 
@@ -127,3 +126,35 @@ stargazer(
 # === Summary stats
 col <- "supports_violence"
 df %>% summarise(min = min(.data[[col]]), mean = mean(.data[[col]]), max = max(.data[[col]]), sd = sd(.data[[col]]))
+
+
+
+# === IV and 2SLS analysis
+
+# First reform is the Musoma Resolution in 1974-1977 which made Universal Primary Education much more accessible
+# This was officially launched in 1977, so use this as an IV for education
+# Since people enter primary when they are 7, consider those born in 1970 as the cutoff
+
+YEAR_OF_REFORM = 1977
+YEAR_OF_SURVEY = 2008
+WINDOW = 5
+PRIMARY_SCHOOL_AGE = 7
+
+df_musoma <- df
+
+# Work out whether the reform affected them (starting school after)
+# Only look within a small window either side
+df_musoma <- df_musoma  %>% mutate(birth_year = SURVEY_YEAR - age) %>% 
+                            mutate(affected_by_reform = birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE) %>%
+                            filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
+                            filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
+
+fit_2sls_musoma <- lm(supports_violence ~ years_educ + age + is_urban + total_expenses + is_polygamous | affected_by_reform + , data = df)
+se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
+
+fit_IV <- ivreg(Y ~ X1 | X3)
+
+# Use heteroskedasticity-consistent covariance matrices for both tests.
+test_OLS <- coeftest(fit_OLS, vcov. = vcovHC(fit_OLS))
+test_IV <- coeftest(fit_IV, vcov. = vcovHC(fit_IV))
+
