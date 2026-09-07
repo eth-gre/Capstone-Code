@@ -17,6 +17,8 @@ df_individual_education = read.csv("data/upd4_hh_c.csv")
 df_personal_information = read.csv("data/upd4_hh_b.csv")
 df_location = read.csv("data/upd4_hh_a.csv")
 df_expenditure = read.csv("data/upd4_hh_l.csv")
+df_religion = read.csv("data/upd4_hh_x1.csv")
+
 
 
 # === Extract the columns we actually want
@@ -25,6 +27,7 @@ df_expenditure = read.csv("data/upd4_hh_l.csv")
 df_views_on_violence <- df_views_on_violence %>% select(UPHI, round, r_hhid, r_id, hy_02_a, hy_02_b, hy_02_c, hy_02_d, hy_02_e, hy_02_f, hy_02_g, hy_02_h)
 df_location <- df_location %>% select(UPHI, round, r_hhid, urban_label = urb_rur)
 df_expenditure <- df_expenditure %>% select(UPHI, round, r_hhid, expense = hl_02)
+df_religion <- df_religion %>% select(UPHI, round, r_hhid, religion_label = hx_10)
 
 
 # These are on an INDIVIDUAL level (UPI)
@@ -33,6 +36,8 @@ df_personal_information <- df_personal_information %>% select(UPI, round, r_hhid
 
 # Clean up the types (R thinks this is a number, silly R)
 df_views_on_violence$r_hhid <- as.character(df_views_on_violence$r_hhid)
+df_religion$r_hhid <- as.character(df_religion$r_hhid)
+
 
 
 # === Create derived columns
@@ -72,6 +77,14 @@ df_expenditure <- df_expenditure %>% group_by(UPHI, round, r_hhid) %>% mutate(to
                                      mutate(total_expenses = total_expenses / 1000)
 
 
+# Show religion through dummies belonging to the main ones. All others are too small to care
+CHRISTIAN_LABELS = c('CATHOLIC', 'LUTHERANS', 'OTHER PROTESTANTS', 'OTHER CHRISTIANS')
+MUSLIM_LABELS = c('MUSLIM')
+
+df_religion <- df_religion %>% mutate(is_muslim = as.integer(religion_label %in% MUSLIM_LABELS)) %>% 
+                               mutate(is_christian = as.integer(religion_label %in% CHRISTIAN_LABELS))
+
+
 # === Filter the data down
 
 # Make everything round 1
@@ -88,7 +101,9 @@ df_individual_education <- df_individual_education %>% filter(!years_educ == 'NA
 df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_personal_information, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
-                                  left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
+                                  left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
+                                  left_join(df_religion, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
+
 
 
 # Then kill off all the rows that didn't merge or are unwanted
@@ -101,7 +116,7 @@ df <- distinct(df)
 
 
 # === Simple OLS regression
-ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous, data = df)
+ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian, data = df)
 se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
@@ -113,11 +128,13 @@ stargazer(
     "Formal education (years)",
     "Age (years)",
     "Urban (1/0)",
-    "Polygamous (1/0)"
+    "Polygamous (1/0)",
+    "Muslim (1/0)",
+    "Christian (1/0)"
   ),
   se = list(se_ols),
   digits = 3,
-  notes = "Heteroskedasticity-robust standard errors are reported in parentheses.",
+  notes = "HC standard errors are reported in parentheses.",
   notes.append = TRUE
 )
 
@@ -148,7 +165,7 @@ df_musoma <- df_musoma  %>% mutate(birth_year = SURVEY_YEAR - age) %>%
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
 
-iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous | affected_by_reform + age + is_urban + is_polygamous, data = df_musoma)
+iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian | affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian, data = df_musoma)
 se_iv_musoma <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
 stargazer(
@@ -160,7 +177,9 @@ stargazer(
     "Formal education (years)",
     "Age (years)",
     "Urban (1/0)",
-    "Polygamous (1/0)"
+    "Polygamous (1/0)",
+    "Muslim (1/0)",
+    "Christian (1/0)"
   ),
   se = list(se_iv_musoma),
   digits = 3,
@@ -172,3 +191,25 @@ summary(iv_musoma, diagnostics = TRUE)
 
 summary(lm(years_educ ~ affected_by_reform, data = df_musoma))
 cor(df_musoma$age, df_musoma$affected_by_reform)
+
+ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian, data = df_musoma)
+se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
+
+stargazer(
+  ols,
+  type = "text",
+  title = "Table 1: OLS Regression Results",
+  dep.var.labels = "Support of intimate partner violence",
+  covariate.labels = c(
+    "Formal education (years)",
+    "Age (years)",
+    "Urban (1/0)",
+    "Polygamous (1/0)",
+    "Muslim (1/0)",
+    "Christian (1/0)"
+  ),
+  se = list(se_ols),
+  digits = 3,
+  notes = "HC standard errors are reported in parentheses.",
+  notes.append = TRUE
+)
