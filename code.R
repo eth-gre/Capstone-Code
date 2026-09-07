@@ -101,19 +101,18 @@ df <- distinct(df)
 
 
 # === Simple OLS regression
-ols <- lm(supports_violence ~ years_educ + age + is_urban + total_expenses + is_polygamous, data = df)
+ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous, data = df)
 se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
   ols,
-  type = "latex",
+  type = "text",
   title = "Table 1: OLS Regression Results",
   dep.var.labels = "Support of intimate partner violence",
   covariate.labels = c(
     "Formal education (years)",
     "Age (years)",
     "Urban (1/0)",
-    "Total expenses (1000TSh)",
     "Polygamous (1/0)"
   ),
   se = list(se_ols),
@@ -145,16 +144,31 @@ df_musoma <- df
 # Work out whether the reform affected them (starting school after)
 # Only look within a small window either side
 df_musoma <- df_musoma  %>% mutate(birth_year = SURVEY_YEAR - age) %>% 
-                            mutate(affected_by_reform = birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE) %>%
+                            mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE)) %>%
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
 
-fit_2sls_musoma <- lm(supports_violence ~ years_educ + age + is_urban + total_expenses + is_polygamous | affected_by_reform + , data = df)
-se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
+iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous | affected_by_reform + age + is_urban + is_polygamous, data = df_musoma)
+se_iv_musoma <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
-fit_IV <- ivreg(Y ~ X1 | X3)
+stargazer(
+  iv_musoma,
+  type = "text",
+  title = "Table 2: 2SLS Regression Results with Musoma Resolution as IV",
+  dep.var.labels = "Support of intimate partner violence",
+  covariate.labels = c(
+    "Formal education (years)",
+    "Age (years)",
+    "Urban (1/0)",
+    "Polygamous (1/0)"
+  ),
+  se = list(se_iv_musoma),
+  digits = 3,
+  notes = "HC standard errors are reported in parentheses.",
+  notes.append = TRUE
+)
 
-# Use heteroskedasticity-consistent covariance matrices for both tests.
-test_OLS <- coeftest(fit_OLS, vcov. = vcovHC(fit_OLS))
-test_IV <- coeftest(fit_IV, vcov. = vcovHC(fit_IV))
+summary(iv_musoma, diagnostics = TRUE)
 
+summary(lm(years_educ ~ affected_by_reform, data = df_musoma))
+cor(df_musoma$age, df_musoma$affected_by_reform)
