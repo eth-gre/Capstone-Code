@@ -58,11 +58,11 @@ educ_years_map <- c(
   "F1" = 9, "F2" = 10, "F3" = 11, "F4" = 12, "F5" = 13, "F6" = 14,
   "U1" = 13, "U2" = 14, "U3" = 15, "U4" = 16, "U5&+" = 17,
   
-  "OSC" = NA,
-  "MS+ COURSE" = NA,
-  "'O'+ COURSE" = NA,
-  "'A'+ COURSE" = NA,
-  "DIPLOMA" = NA
+  "OSC" = 13,
+  "MS+ COURSE" = 13,
+  "'O'+ COURSE" = 13,
+  "'A'+ COURSE" = 13,
+  "DIPLOMA" = 13
 )
 
 fathers_educ_years_map <- c(
@@ -81,6 +81,13 @@ df_personal_information$fathers_educ <- fathers_educ_years_map[df_personal_infor
 
 # Just write these as -1s to be dropped later
 df_personal_information$fathers_educ[is.na(df_personal_information$fathers_educ)] <- -1
+
+df_personal_information <- df_personal_information %>% mutate(fathers_educ_na = ifelse(fathers_educ == -1, NA, fathers_educ)) %>%
+                                                       group_by(UPI) %>%
+                                                       mutate(fathers_educ_filled = suppressWarnings(max(fathers_educ_na, na.rm = TRUE))) %>%
+                                                       ungroup() %>%
+                                                       mutate(fathers_educ_filled = ifelse(is.infinite(fathers_educ_filled), -1, fathers_educ_filled)) %>%
+                                                       select(-fathers_educ_na)
 
 # Map variables to a 1 or 0
 df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE')) %>% 
@@ -124,16 +131,17 @@ df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round"
                                   left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
                                   left_join(df_religion, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
 
-
+df <- df %>% mutate(birth_year = 2008 - age)
 
 # Then kill off all the rows that didn't merge or are unwanted
 df <- df %>% filter(!supports_violence == 'NA') %>% 
              filter(!is.na(total_expenses) & total_expenses > 0) %>% 
-             filter(is_female == 1) %>%
-             filter(fathers_educ == -1)
+             filter(is_female == 1) %>% 
+             filter(fathers_educ_filled >= 0) %>% 
+             filter(birth_year > 1950)
+
 
 df <- distinct(df)
-
 
 
 # === Simple OLS regression
@@ -182,13 +190,12 @@ df_musoma <- df
 
 # Work out whether the reform affected them (starting school after)
 # Only look within a small window either side
-df_musoma <- df_musoma  %>% mutate(birth_year = YEAR_OF_SURVEY - age) %>% 
-                            mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE)) %>%
+df_musoma <- df_musoma  %>% mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE)) %>%
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
 
 iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol | 
-                                       affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol,
+                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol,
                                        data = df_musoma)
 se_iv_musoma <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
@@ -241,3 +248,15 @@ stargazer(
   notes = "HC standard errors are reported in parentheses.",
   notes.append = TRUE
 )
+
+hist(df$birth_year, breaks=30)
+
+plot(df$birth_year, df$supports_violence,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.3),
+     xlab = "Birth year", ylab = "Years of education",
+     main = "Education vs. Birth Year")
+
+# Binned means by birth year
+binned <- aggregate(supports_violence ~ birth_year, data = df, FUN = mean)
+lines(binned$birth_year, binned$supports_violence, col = "darkred", lwd = 2)
+points(binned$birth_year, binned$supports_violence, col = "darkred", pch = 19)
