@@ -32,7 +32,7 @@ df_religion <- df_religion %>% select(UPHI, round, r_hhid, religion_label = hx_1
 
 # These are on an INDIVIDUAL level (UPI)
 df_individual_education <- df_individual_education %>% select(UPI, round, r_hhid, r_id, grade_label = hc_07, educ_cost = hc_28_8)
-df_personal_information <- df_personal_information %>% select(UPI, round, r_hhid, r_id, sex_label = hb_02, age = hb_04, marriage_label = hb_19)
+df_personal_information <- df_personal_information %>% select(UPI, round, r_hhid, r_id, sex_label = hb_02, age = hb_04, marriage_label = hb_19, fathers_educ_label = hb_14)
 df_alcohol <- df_alcohol %>% select(UPI, round, r_hhid, r_id, alcohol_label = hf_08)
 
 
@@ -65,7 +65,22 @@ educ_years_map <- c(
   "DIPLOMA" = NA
 )
 
+fathers_educ_years_map <- c(
+  "NO SCHOOL" = 0,
+  "DON'T KNOW" = 0,
+  
+  "SOME PRIMARY" = 3,
+  "COMPLETED PRIMARY" = 6,
+  "SOME SECONDARY" = 9,
+  "COMPLETED SECONDARY" = 13,
+  "MORE THAN SECONDARY" = 17
+)
+
 df_individual_education$years_educ <- educ_years_map[df_individual_education$grade_label]
+df_personal_information$fathers_educ <- fathers_educ_years_map[df_personal_information$fathers_educ_label]
+
+# Just write these as -1s to be dropped later
+df_personal_information$fathers_educ[is.na(df_personal_information$fathers_educ)] <- -1
 
 # Map variables to a 1 or 0
 df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE')) %>% 
@@ -114,7 +129,8 @@ df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round"
 # Then kill off all the rows that didn't merge or are unwanted
 df <- df %>% filter(!supports_violence == 'NA') %>% 
              filter(!is.na(total_expenses) & total_expenses > 0) %>% 
-             filter(is_female == 1)
+             filter(is_female == 1) %>%
+             filter(fathers_educ == -1)
 
 df <- distinct(df)
 
@@ -166,7 +182,7 @@ df_musoma <- df
 
 # Work out whether the reform affected them (starting school after)
 # Only look within a small window either side
-df_musoma <- df_musoma  %>% mutate(birth_year = SURVEY_YEAR - age) %>% 
+df_musoma <- df_musoma  %>% mutate(birth_year = YEAR_OF_SURVEY - age) %>% 
                             mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE)) %>%
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
@@ -203,11 +219,11 @@ mean(df_musoma$affected_by_reform)
 summary(lm(years_educ ~ affected_by_reform, data = df_musoma))
 cor(df_musoma$age, df_musoma$affected_by_reform)
 
-ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol, data = df_musoma)
-se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
+ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol, data = df_musoma)
+se_ols_1970 <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
-  ols,
+  ols_1970,
   type = "text",
   title = "Table 3: OLS Regression Results in Musoma Time Window",
   dep.var.labels = "Support of intimate partner violence",
@@ -220,7 +236,7 @@ stargazer(
     "Christian (1/0)",
     "Drank alcohol (1/0)"
   ),
-  se = list(se_ols),
+  se = list(se_ols_1970),
   digits = 3,
   notes = "HC standard errors are reported in parentheses.",
   notes.append = TRUE
