@@ -2,7 +2,7 @@
 library(AER)
 library(stargazer)
 library(dplyr)
-
+library(tidyr)
 
 
 # === Load the data across all CSVs
@@ -19,6 +19,7 @@ df_location = read.csv("data/upd4_hh_a.csv")
 df_expenditure = read.csv("data/upd4_hh_l.csv")
 df_religion = read.csv("data/upd4_hh_x1.csv")
 df_alcohol = read.csv("data/upd4_hh_f.csv")
+df_wealth = read.csv("data/upd4_hh_m.csv")
 
 
 # === Extract the columns we actually want
@@ -28,6 +29,7 @@ df_views_on_violence <- df_views_on_violence %>% select(UPHI, round, r_hhid, r_i
 df_location <- df_location %>% select(UPHI, round, r_hhid, urban_label = urb_rur)
 df_expenditure <- df_expenditure %>% select(UPHI, round, r_hhid, expense = hl_02)
 df_religion <- df_religion %>% select(UPHI, round, r_hhid, religion_label = hx_10)
+df_wealth <- df_wealth %>% select(UPHI, round, r_hhid, item_label = hm_00, amount = hm_01, buy_price = hm_03, sell_price = hm_04)
 
 
 # These are on an INDIVIDUAL level (UPI)
@@ -82,6 +84,8 @@ df_personal_information$fathers_educ <- fathers_educ_years_map[df_personal_infor
 # Just write these as -1s to be dropped later
 df_personal_information$fathers_educ[is.na(df_personal_information$fathers_educ)] <- -1
 
+# Because fathers education is very poorly reported, find the highest education that they submitted across any wave. This could see overestiamtes
+# So measurement error is defiantely an issue, but its much better than everybody saying 'i dont know'.
 df_personal_information <- df_personal_information %>% mutate(fathers_educ_na = ifelse(fathers_educ == -1, NA, fathers_educ)) %>%
                                                        group_by(UPI) %>%
                                                        mutate(fathers_educ_filled = suppressWarnings(max(fathers_educ_na, na.rm = TRUE))) %>%
@@ -89,9 +93,71 @@ df_personal_information <- df_personal_information %>% mutate(fathers_educ_na = 
                                                        mutate(fathers_educ_filled = ifelse(is.infinite(fathers_educ_filled), -1, fathers_educ_filled)) %>%
                                                        select(-fathers_educ_na)
 
+
+# To work out their wealth, add in the price of each item (enormous measurement error but better than another)
+# If anything is unkwown, use 10 units as standard
+asset_value_map <- c(
+  "Radio and radio cassette" = 10
+)
+
+df_wealth$price <- asset_value_map[df_wealth$item_label]
+df_wealth$price[is.na(df_wealth$price)] <- 10
+df_wealth <- df_wealth %>% mutate(value = price * amount)
+
+df_wealth <- df_wealth %>% group_by(UPHI, round, r_hhid) %>% 
+                           mutate(total_value = sum(value, na.rm = TRUE)) %>%
+                           select(UPHI, round, r_hhid, total_value) %>% 
+                           ungroup()
+
+asset_value_fallback <- c(
+  "Radio and radio cassette" = 10
+)
+
+# === Derive average prices per item label from buy_price and sell_price
+# Treat 0 and NA as "not reported" and exclude them from the average
+price_summary <- df_wealth %>%
+  select(item_label, buy_price, sell_price) %>%
+  pivot_longer(cols = c(buy_price, sell_price), names_to = "price_type", values_to = "price") %>%
+  filter(!is.na(price) & price > 0) %>%
+  group_by(item_label) %>%
+  summarise(avg_price = mean(price, na.rm = TRUE), n_obs = n(), .groups = "drop")
+
+# === Debug print: every label, its derived price, and observation count
+# Includes labels with zero valid observations (shown as price = 0, n_obs = 0)
+debug_table <- data.frame(item_label = unique(df_wealth$item_label)) %>%
+  left_join(price_summary, by = "item_label") %>%
+  mutate(avg_price = ifelse(is.na(avg_price), 0, avg_price),
+         n_obs = ifelse(is.na(n_obs), 0, n_obs)) %>%
+  arrange(desc(avg_price))
+
+print(debug_table)
+
+# === Build the final price map: derived values first, fallback fills any gaps
+asset_value_map <- setNames(price_summary$avg_price, price_summary$item_label)
+
+missing_labels <- setdiff(names(asset_value_fallback), names(asset_value_map))
+asset_value_map[missing_labels] <- asset_value_fallback[missing_labels]
+
+# === Apply to df_wealth, with a final hardcoded 10 for anything still missing
+df_wealth$price <- asset_value_map[df_wealth$item_label]
+df_wealth$price[is.na(df_wealth$price)] <- 10
+
+df_wealth <- df_wealth %>% mutate(value = price * amount)
+
+df_wealth <- df_wealth %>% group_by(UPHI, round, r_hhid) %>% mutate(total_value = sum(value, na.rm = TRUE)) %>%
+  select(UPHI, round, r_hhid, total_value) %>% 
+  ungroup()
+
+
+
+
+
+
+
 # Map variables to a 1 or 0
 df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE')) %>% 
-                                                       mutate(is_polygamous = as.integer(marriage_label == 'POLYGAMOUS MARRIED'))
+                                                       mutate(is_polygamous = as.integer(marriage_label == 'POLYGAMOUS MARRIED')) %>%
+                                                       mutate(birth_year = 2008 - age)
 
 df_location <- df_location %>% mutate(is_urban = as.integer(urban_label == 'URBAN'))
 
@@ -129,23 +195,26 @@ df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round"
                                   left_join(df_alcohol, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
                                   left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
-                                  left_join(df_religion, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many")
+                                  left_join(df_religion, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>%
+                                  left_join(df_wealth, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") 
 
-df <- df %>% mutate(birth_year = 2008 - age)
+# TODO Make the merge on wealth correctly kill off the columns
 
 # Then kill off all the rows that didn't merge or are unwanted
 df <- df %>% filter(!supports_violence == 'NA') %>% 
              filter(!is.na(total_expenses) & total_expenses > 0) %>% 
              filter(is_female == 1) %>% 
              filter(fathers_educ_filled >= 0) %>% 
-             filter(birth_year > 1950)
+             filter(birth_year > 1950) %>%
+             filter(total_value > 0)
+
 
 
 df <- distinct(df)
 
 
 # === Simple OLS regression
-ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol, data = df)
+ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_value, data = df)
 se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
@@ -160,7 +229,8 @@ stargazer(
     "Polygamous (1/0)",
     "Muslim (1/0)",
     "Christian (1/0)",
-    "Drank alcohol (1/0)"
+    "Drank alcohol (1/0)",
+    "Wealth"
   ),
   se = list(se_ols),
   digits = 3,
@@ -249,7 +319,7 @@ stargazer(
   notes.append = TRUE
 )
 
-hist(df$birth_year, breaks=30)
+hist(df$age, breaks=60)
 
 plot(df$birth_year, df$supports_violence,
      pch = 16, col = adjustcolor("steelblue", alpha.f = 0.3),
@@ -260,3 +330,34 @@ plot(df$birth_year, df$supports_violence,
 binned <- aggregate(supports_violence ~ birth_year, data = df, FUN = mean)
 lines(binned$birth_year, binned$supports_violence, col = "darkred", lwd = 2)
 points(binned$birth_year, binned$supports_violence, col = "darkred", pch = 19)
+
+
+# === 2SLS for just the father's education IV
+iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol | 
+                   fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol,
+                   data = df)
+se_iv_father <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
+
+stargazer(
+  iv_father,
+  type = "text",
+  title = "Table 3: 2SLS Regression Results with Father's Education as IV",
+  dep.var.labels = "Support of intimate partner violence",
+  covariate.labels = c(
+    "Formal education (years)",
+    "Age (years)",
+    "Urban (1/0)",
+    "Polygamous (1/0)",
+    "Muslim (1/0)",
+    "Christian (1/0)",
+    "Drank alcohol (1/0)"
+  ),
+  se = list(se_iv_father),
+  digits = 3,
+  notes = "HC standard errors are reported in parentheses.",
+  notes.append = TRUE
+)
+
+summary(iv_musoma, diagnostics = TRUE)
+
+summary(lm(years_educ ~ fathers_educ_filled, data=df))
