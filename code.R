@@ -16,7 +16,6 @@ df_individual_education = read.csv("data/upd4_hh_c.csv")
 # Controls
 df_personal_information = read.csv("data/upd4_hh_b.csv")
 df_location = read.csv("data/upd4_hh_a.csv")
-df_expenditure = read.csv("data/upd4_hh_l.csv")
 df_religion = read.csv("data/upd4_hh_x1.csv")
 df_alcohol = read.csv("data/upd4_hh_f.csv")
 df_wealth = read.csv("data/upd4_hh_m.csv")
@@ -27,7 +26,6 @@ df_wealth = read.csv("data/upd4_hh_m.csv")
 # These are on a HOUSEHOLD level (UPHI)
 df_views_on_violence <- df_views_on_violence %>% select(UPHI, round, r_hhid, r_id, hy_02_a, hy_02_b, hy_02_c, hy_02_d, hy_02_e, hy_02_f, hy_02_g, hy_02_h)
 df_location <- df_location %>% select(UPHI, round, r_hhid, urban_label = urb_rur)
-df_expenditure <- df_expenditure %>% select(UPHI, round, r_hhid, expense = hl_02)
 df_religion <- df_religion %>% select(UPHI, round, r_hhid, religion_label = hx_10)
 df_wealth <- df_wealth %>% select(UPHI, round, r_hhid, item_label = hm_00, amount = hm_01, buy_price = hm_03, sell_price = hm_04)
 
@@ -94,33 +92,26 @@ df_personal_information <- df_personal_information %>% mutate(fathers_educ_na = 
                                                        select(-fathers_educ_na)
 
 
-# To work out their wealth, add in the price of each item (enormous measurement error but better than another)
-# If anything is unkwown, use 10 units as standard
-asset_value_map <- c(
-  "Radio and radio cassette" = 10
-)
-
-df_wealth$price <- asset_value_map[df_wealth$item_label]
-df_wealth$price[is.na(df_wealth$price)] <- 10
-df_wealth <- df_wealth %>% mutate(value = price * amount)
-
-df_wealth <- df_wealth %>% group_by(UPHI, round, r_hhid) %>% 
-                           mutate(total_value = sum(value, na.rm = TRUE)) %>%
-                           select(UPHI, round, r_hhid, total_value) %>% 
-                           ungroup()
-
+# To work out their wealth, add the average price of each item and multiply by the quantity
+# Some products dont have price data, so use a reasonable fallback
+# Take the buy_price and sell_price across all waves and just average these
+# Yes, this fails to adjust for CPI and whatnot, but that error is tiny compared to the other measurement error here
 asset_value_fallback <- c(
-  "Radio and radio cassette" = 10
+  "COOKING POTS, CUPS, OTHER KITCHEN UTENCILS" = 10000,
+  "BOOKS (NOT SCHOOL BOOKS)" = 3000,
+  "FIELDS/LAND" = 100000,
+  "HOES" = 10000,
+  "CUPBOARDS, CHEST-OF-DRAWERS, BOXES, WARDROBES,BOOKCASES" = 20000,
+  "LANTERNS" = 5000,
+  "FERTILIZER DISTRIBUTOR" = 100000
 )
 
-# === Derive average prices per item label from buy_price and sell_price
-# Treat 0 and NA as "not reported" and exclude them from the average
-price_summary <- df_wealth %>%
-  select(item_label, buy_price, sell_price) %>%
-  pivot_longer(cols = c(buy_price, sell_price), names_to = "price_type", values_to = "price") %>%
-  filter(!is.na(price) & price > 0) %>%
-  group_by(item_label) %>%
-  summarise(avg_price = mean(price, na.rm = TRUE), n_obs = n(), .groups = "drop")
+# When agging up the prices, anything 0 or NA will be treated as incorrectly reported and ignored
+price_summary <- df_wealth %>% select(item_label, buy_price, sell_price) %>%
+                               pivot_longer(cols = c(buy_price, sell_price), names_to = "type", values_to = "price") %>%
+                               filter(!is.na(price) & price > 0) %>%
+                               group_by(item_label) %>%
+                               summarise(avg_price = mean(price, trim = 0.01, na.rm = TRUE), n_obs = n(), .groups = "drop")
 
 # === Debug print: every label, its derived price, and observation count
 # Includes labels with zero valid observations (shown as price = 0, n_obs = 0)
@@ -132,27 +123,23 @@ debug_table <- data.frame(item_label = unique(df_wealth$item_label)) %>%
 
 print(debug_table)
 
-# === Build the final price map: derived values first, fallback fills any gaps
+# From our table, build a map out of them to apply to all the rows
 asset_value_map <- setNames(price_summary$avg_price, price_summary$item_label)
 
+# From testing we know a few of these didn't have any price data so just manually append some guesstimates
 missing_labels <- setdiff(names(asset_value_fallback), names(asset_value_map))
 asset_value_map[missing_labels] <- asset_value_fallback[missing_labels]
 
-# === Apply to df_wealth, with a final hardcoded 10 for anything still missing
+# Finally, save this an normalise to 10k TSh
 df_wealth$price <- asset_value_map[df_wealth$item_label]
-df_wealth$price[is.na(df_wealth$price)] <- 10
-
 df_wealth <- df_wealth %>% mutate(value = price * amount)
 
-df_wealth <- df_wealth %>% group_by(UPHI, round, r_hhid) %>% mutate(total_value = sum(value, na.rm = TRUE)) %>%
-  select(UPHI, round, r_hhid, total_value) %>% 
-  ungroup()
-
-
-
-
-
-
+# Need to get rid of some crazy outliers that blow up house prices and what not
+df_wealth <- df_wealth %>% group_by(UPHI, round, r_hhid) %>% 
+                           mutate(total_wealth = sum(value, na.rm = TRUE)) %>%
+                           select(UPHI, round, r_hhid, total_wealth) %>%
+                           mutate(total_wealth = total_wealth / 1000000) %>%
+                           ungroup()
 
 # Map variables to a 1 or 0
 df_personal_information <- df_personal_information %>% mutate(is_female = as.integer(sex_label == 'FEMALE')) %>% 
@@ -160,11 +147,6 @@ df_personal_information <- df_personal_information %>% mutate(is_female = as.int
                                                        mutate(birth_year = 2008 - age)
 
 df_location <- df_location %>% mutate(is_urban = as.integer(urban_label == 'URBAN'))
-
-# For household expenditure, group and sum (then drop the individual expenses to help with the merge)
-df_expenditure <- df_expenditure %>% group_by(UPHI, round, r_hhid) %>% mutate(total_expenses = sum(expense, na.rm = TRUE)) %>% ungroup() %>% 
-                                     select(UPHI, round, r_hhid, total_expenses) %>% 
-                                     mutate(total_expenses = total_expenses / 1000)
 
 
 # Show religion through dummies belonging to the main ones. All others are too small to care
@@ -194,19 +176,16 @@ df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round"
                                   left_join(df_personal_information, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_alcohol, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
-                                  left_join(df_expenditure, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
                                   left_join(df_religion, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>%
                                   left_join(df_wealth, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") 
 
-# TODO Make the merge on wealth correctly kill off the columns
 
 # Then kill off all the rows that didn't merge or are unwanted
 df <- df %>% filter(!supports_violence == 'NA') %>% 
-             filter(!is.na(total_expenses) & total_expenses > 0) %>% 
              filter(is_female == 1) %>% 
              filter(fathers_educ_filled >= 0) %>% 
              filter(birth_year > 1950) %>%
-             filter(total_value > 0)
+             filter(total_wealth > 0 & !is.na(total_wealth))
 
 
 
@@ -214,7 +193,7 @@ df <- distinct(df)
 
 
 # === Simple OLS regression
-ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_value, data = df)
+ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
 se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
@@ -230,7 +209,7 @@ stargazer(
     "Muslim (1/0)",
     "Christian (1/0)",
     "Drank alcohol (1/0)",
-    "Wealth"
+    "Wealth (1M TSh)"
   ),
   se = list(se_ols),
   digits = 3,
@@ -264,8 +243,8 @@ df_musoma <- df_musoma  %>% mutate(affected_by_reform = as.integer(birth_year >=
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
 
-iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol | 
-                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol,
+iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                                        data = df_musoma)
 se_iv_musoma <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
@@ -281,7 +260,8 @@ stargazer(
     "Polygamous (1/0)",
     "Muslim (1/0)",
     "Christian (1/0)",
-    "Drank alcohol (1/0)"
+    "Drank alcohol (1/0)",
+    "Wealth (10k TSh)"
   ),
   se = list(se_iv_musoma),
   digits = 3,
@@ -296,7 +276,7 @@ mean(df_musoma$affected_by_reform)
 summary(lm(years_educ ~ affected_by_reform, data = df_musoma))
 cor(df_musoma$age, df_musoma$affected_by_reform)
 
-ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol, data = df_musoma)
+ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df_musoma)
 se_ols_1970 <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
 stargazer(
@@ -311,7 +291,8 @@ stargazer(
     "Polygamous (1/0)",
     "Muslim (1/0)",
     "Christian (1/0)",
-    "Drank alcohol (1/0)"
+    "Drank alcohol (1/0)",
+    "Wealth (1M TSh)"
   ),
   se = list(se_ols_1970),
   digits = 3,
@@ -319,22 +300,10 @@ stargazer(
   notes.append = TRUE
 )
 
-hist(df$age, breaks=60)
-
-plot(df$birth_year, df$supports_violence,
-     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.3),
-     xlab = "Birth year", ylab = "Years of education",
-     main = "Education vs. Birth Year")
-
-# Binned means by birth year
-binned <- aggregate(supports_violence ~ birth_year, data = df, FUN = mean)
-lines(binned$birth_year, binned$supports_violence, col = "darkred", lwd = 2)
-points(binned$birth_year, binned$supports_violence, col = "darkred", pch = 19)
-
 
 # === 2SLS for just the father's education IV
-iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol | 
-                   fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol,
+iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                   fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                    data = df)
 se_iv_father <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
@@ -350,7 +319,8 @@ stargazer(
     "Polygamous (1/0)",
     "Muslim (1/0)",
     "Christian (1/0)",
-    "Drank alcohol (1/0)"
+    "Drank alcohol (1/0)",
+    "Wealth (1M TSh)"
   ),
   se = list(se_iv_father),
   digits = 3,
