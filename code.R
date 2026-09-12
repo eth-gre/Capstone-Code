@@ -81,6 +81,15 @@ fathers_educ_years_map <- c(
 df_individual_education$years_educ <- educ_years_map[df_individual_education$grade_label]
 df_personal_information$fathers_educ <- fathers_educ_years_map[df_personal_information$fathers_educ_label]
 
+df_learning_progress <- df_individual_education %>% filter(!is.na(years_educ)) %>%
+                                                    group_by(UPI) %>%
+                                                    mutate(round1_educ = years_educ[round == 1][1]) %>%
+                                                    filter(!is.na(round1_educ)) %>%
+                                                    summarise(
+                                                          still_learning = as.integer(any(round > 1 & years_educ > round1_educ)),
+                                                          .groups = "drop"
+                                                    )
+
 # Just write these as -1s to be dropped later
 df_personal_information$fathers_educ[is.na(df_personal_information$fathers_educ)] <- -1
 
@@ -164,7 +173,8 @@ df_individual_education <- df_individual_education %>% filter(!years_educ == 'NA
 
 
 # === Merge all of the CSVs together (on an individual level)
-df <- df_individual_education %>% left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id")) %>% 
+df <- df_individual_education %>% left_join(df_learning_progress, by = "UPI") %>%
+                                  left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_personal_information, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_alcohol, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_location, by = c("round", "r_hhid", "UPHI"), relationship = "many-to-many") %>% 
@@ -337,21 +347,32 @@ summary(iv_father_1970, diagnostics = TRUE)
 summary(iv_musoma_1970, diagnostics = TRUE)
 
 
-# === Diagnostics
+# === Panel data stuff
 
-# Quick fn to check the ICC within households.
-# Many of them are very high (is_urban, religion etc), so this shows why clustering was needed
-# These values are probably inflated by many clusters only having one member
-icc_check <- function(var, data) {
-  m <- lm(as.formula(paste(var, "~ 1")), data = data)
-  aov_fit <- aov(as.formula(paste(var, "~ factor(UPHI)")), data = data)
-  ss <- summary(aov_fit)[[1]]
-  between <- ss["factor(UPHI)", "Sum Sq"]
-  total <- between + ss["Residuals", "Sum Sq"]
-  between / total
-}
+# More interesting interactions between education and IPV
+df <- df %>% mutate(high_school_level = years_educ >= 9 & years_educ < 13) %>%
+             mutate(university_level = years_educ >= 13) %>%
+             mutate(years_educ_still_learning = years_educ * still_learning) %>%
+  
 
-vars <- c("years_educ", "age", "is_urban", "is_muslim", "is_christian", 
-          "is_polygamous", "drank_alcohol", "total_wealth")
-icc_results <- sapply(vars, icc_check, data = df)
-print(icc_results)
+iv_interaction <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning | 
+                     fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning,
+                   data = df)
+se_iv_interaction <- sqrt(diag(vcovCL(iv_interaction, cluster = ~ UPHI)))
+summary(iv_interaction, diagnostics = TRUE)
+
+
+stargazer(
+  iv_interaction,
+  type = "text",
+  title = "2SLS Results Across the Full Sample",
+  dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("IV: Father's Educ"),
+  covariate.labels = c("Formal education (years)", "Still learning", "Highest grade high school", "Highest grade university"),
+  keep = c("years_educ", "still_learning", "high_school_level", "university_level"),
+  add.lines = list(c("Controls included?", "Yes")),
+  se = list(se_iv_interaction),
+  digits = 3,
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
