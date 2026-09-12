@@ -220,7 +220,7 @@ df %>% summarise(min = min(.data[[col]]), mean = mean(.data[[col]]), max = max(.
 cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
           "is_christian", "is_polygamous", "drank_alcohol", "total_wealth")
 
-summary_stats <- df %>%
+summary_stats <- df_musoma %>%
   summarise(across(all_of(cols), list(min = min, mean = mean, max = max, sd = sd),
                    .names = "{.col}__{.fn}")) %>%
   pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
@@ -235,8 +235,25 @@ print(summary_stats)
 # This is the only one that runs across the entire period
 iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                           fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                        data = df_musoma)
-se_iv_father <- sqrt(diag(vcovHC(iv_father, type = "HC1")))
+                        data = df)
+se_iv_father <- sqrt(diag(vcovCL(iv_father, cluster = ~ UPHI)))
+summary(iv_father, diagnostics = TRUE)
+
+
+stargazer(
+  iv_father,
+  type = "text",
+  title = "2SLS Results Across the Full Sample",
+  dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("IV: Father's Educ"),
+  covariate.labels = c("Formal education (years)"),
+  keep = c("years_educ"),
+  se = list(se_iv_father),
+  digits = 3,
+  add.lines = list(c("Controls included?", "Yes")),
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
 
 
 
@@ -259,29 +276,29 @@ df_musoma <- df_musoma  %>% mutate(affected_by_reform = as.integer(birth_year >=
 
 # We're gonna run 4 regressions in this time period, OLS, each IV, IVs together
 ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df_musoma)
-se_ols_1970 <- sqrt(diag(vcovHC(ols, type = "HC1")))
+se_ols_1970 <- sqrt(diag(vcovCL(ols_1970, cluster = ~ UPHI)))
 
 iv_both <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                                        affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                                        data = df_musoma)
-se_iv_both <- sqrt(diag(vcovHC(iv_both, type = "HC1")))
+se_iv_both <- sqrt(diag(vcovCL(iv_both, cluster = ~ UPHI)))
 
 
 iv_father_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                    fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                    data = df_musoma)
-se_iv_father_1970 <- sqrt(diag(vcovHC(iv_father_1970, type = "HC1")))
+se_iv_father_1970 <- sqrt(diag(vcovCL(iv_father_1970, cluster = ~ UPHI)))
 
 iv_musoma_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                         affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                         data = df_musoma)
-se_iv_musoma_1970 <- sqrt(diag(vcovHC(iv_musoma_1970, type = "HC1")))
+se_iv_musoma_1970 <- sqrt(diag(vcovCL(iv_musoma_1970, cluster = ~ UPHI)))
 
 
 stargazer(
   ols_1970, iv_musoma_1970, iv_father_1970, iv_both,
   type = "text",
-  title = "Table: OLS vs. 2SLS Results in Musoma Time Window",
+  title = "OLS and 2SLS Results in Musoma Time Window",
   dep.var.labels = "Support of intimate partner violence",
   column.labels = c("OLS", "IV: Reform", "IV: Father's Educ", "IV: Both"),
   covariate.labels = c(
@@ -296,7 +313,22 @@ stargazer(
   ),
   se = list(se_ols_1970, se_iv_musoma_1970, se_iv_father_1970, se_iv_both),
   digits = 3,
-  notes = "HC standard errors are reported in parentheses. All models restricted to the Musoma time window.",
+  notes = "Robust SEs are clusterd on household.",
+  notes.append = TRUE
+)
+
+stargazer(
+  ols_1970, iv_musoma_1970, iv_father_1970, iv_both,
+  type = "text",
+  title = "OLS and 2SLS Results in Musoma Time Window",
+  dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("OLS", "IV: Reform", "IV: Father's Educ", "IV: Both"),
+  covariate.labels = c("Formal education (years)"),
+  keep = c("years_educ"),
+  se = list(se_ols_1970, se_iv_musoma_1970, se_iv_father_1970, se_iv_both),
+  digits = 3,
+  add.lines = list(c("Controls included?", c("Yes", "Yes", "Yes", "Yes"))),
+  notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
 
