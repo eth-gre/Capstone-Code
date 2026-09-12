@@ -3,6 +3,8 @@ library(AER)
 library(stargazer)
 library(dplyr)
 library(sandwich)
+library(tidyr)
+
 
 
 # === Load the data across all CSVs
@@ -230,6 +232,14 @@ print(summary_stats)
 
 # === IV and 2SLS analysis
 
+# This is the only one that runs across the entire period
+iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                          fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                        data = df_musoma)
+se_iv_father <- sqrt(diag(vcovHC(iv_father, type = "HC1")))
+
+
+
 # Reform is the Musoma Resolution in 1974-1977 which made Universal Primary Education much more accessible
 # This was officially launched in 1977, we use this as an IV for education
 # Since people enter primary when they are 7, consider those born in 1970 as when the regime shift occurs
@@ -254,13 +264,13 @@ se_ols_1970 <- sqrt(diag(vcovHC(ols, type = "HC1")))
 iv_both <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                                        affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                                        data = df_musoma)
-se_iv_both <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
+se_iv_both <- sqrt(diag(vcovHC(iv_both, type = "HC1")))
 
 
 iv_father_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                    fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                    data = df_musoma)
-se_iv_father_1970 <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
+se_iv_father_1970 <- sqrt(diag(vcovHC(iv_father_1970, type = "HC1")))
 
 iv_musoma_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                         affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
