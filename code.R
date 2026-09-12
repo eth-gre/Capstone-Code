@@ -2,7 +2,7 @@
 library(AER)
 library(stargazer)
 library(dplyr)
-library(tidyr)
+library(sandwich)
 
 
 # === Load the data across all CSVs
@@ -111,17 +111,7 @@ price_summary <- df_wealth %>% select(item_label, buy_price, sell_price) %>%
                                pivot_longer(cols = c(buy_price, sell_price), names_to = "type", values_to = "price") %>%
                                filter(!is.na(price) & price > 0) %>%
                                group_by(item_label) %>%
-                               summarise(avg_price = mean(price, trim = 0.01, na.rm = TRUE), n_obs = n(), .groups = "drop")
-
-# === Debug print: every label, its derived price, and observation count
-# Includes labels with zero valid observations (shown as price = 0, n_obs = 0)
-debug_table <- data.frame(item_label = unique(df_wealth$item_label)) %>%
-  left_join(price_summary, by = "item_label") %>%
-  mutate(avg_price = ifelse(is.na(avg_price), 0, avg_price),
-         n_obs = ifelse(is.na(n_obs), 0, n_obs)) %>%
-  arrange(desc(avg_price))
-
-print(debug_table)
+                               summarise(avg_price = median(price, na.rm = TRUE), n_obs = n(), .groups = "drop")
 
 # From our table, build a map out of them to apply to all the rows
 asset_value_map <- setNames(price_summary$avg_price, price_summary$item_label)
@@ -196,8 +186,11 @@ df <- distinct(df)
 ols <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
 se_ols <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
+# Since there is likely a lot of intra-household dependence let's make sure we cluster our SE correctly on UPHI
+se_ols_clustered <- sqrt(diag(vcovCL(ols, cluster = ~ UPHI)))
+
 stargazer(
-  ols,
+  ols, ols,
   type = "text",
   title = "Table 1: OLS Regression Results",
   dep.var.labels = "Support of intimate partner violence",
@@ -211,7 +204,7 @@ stargazer(
     "Drank alcohol (1/0)",
     "Wealth (1M TSh)"
   ),
-  se = list(se_ols),
+  se = list(se_ols, se_ols_clustered),
   digits = 3,
   notes = "HC standard errors are reported in parentheses.",
   notes.append = TRUE
@@ -222,17 +215,28 @@ stargazer(
 col <- "supports_violence"
 df %>% summarise(min = min(.data[[col]]), mean = mean(.data[[col]]), max = max(.data[[col]]), sd = sd(.data[[col]]))
 
+cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
+          "is_christian", "is_polygamous", "drank_alcohol", "total_wealth")
+
+summary_stats <- df %>%
+  summarise(across(all_of(cols), list(min = min, mean = mean, max = max, sd = sd),
+                   .names = "{.col}__{.fn}")) %>%
+  pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
+               values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+print(summary_stats)
 
 
 # === IV and 2SLS analysis
 
-# First reform is the Musoma Resolution in 1974-1977 which made Universal Primary Education much more accessible
-# This was officially launched in 1977, so use this as an IV for education
-# Since people enter primary when they are 7, consider those born in 1970 as the cutoff
+# Reform is the Musoma Resolution in 1974-1977 which made Universal Primary Education much more accessible
+# This was officially launched in 1977, we use this as an IV for education
+# Since people enter primary when they are 7, consider those born in 1970 as when the regime shift occurs
 
 YEAR_OF_REFORM = 1977
 YEAR_OF_SURVEY = 2008
-WINDOW = 5
+WINDOW = 3
 PRIMARY_SCHOOL_AGE = 7
 
 df_musoma <- df
@@ -243,75 +247,33 @@ df_musoma <- df_musoma  %>% mutate(affected_by_reform = as.integer(birth_year >=
                             filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
                             filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
 
-iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                                       data = df_musoma)
-se_iv_musoma <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
-
-stargazer(
-  iv_musoma,
-  type = "text",
-  title = "Table 2: 2SLS Regression Results with Musoma Resolution as IV",
-  dep.var.labels = "Support of intimate partner violence",
-  covariate.labels = c(
-    "Formal education (years)",
-    "Age (years)",
-    "Urban (1/0)",
-    "Polygamous (1/0)",
-    "Muslim (1/0)",
-    "Christian (1/0)",
-    "Drank alcohol (1/0)",
-    "Wealth (10k TSh)"
-  ),
-  se = list(se_iv_musoma),
-  digits = 3,
-  notes = "HC standard errors are reported in parentheses.",
-  notes.append = TRUE
-)
-
-summary(iv_musoma, diagnostics = TRUE)
-
-mean(df_musoma$affected_by_reform)
-
-summary(lm(years_educ ~ affected_by_reform, data = df_musoma))
-cor(df_musoma$age, df_musoma$affected_by_reform)
-
+# We're gonna run 4 regressions in this time period, OLS, each IV, IVs together
 ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df_musoma)
 se_ols_1970 <- sqrt(diag(vcovHC(ols, type = "HC1")))
 
-stargazer(
-  ols_1970,
-  type = "text",
-  title = "Table 3: OLS Regression Results in Musoma Time Window",
-  dep.var.labels = "Support of intimate partner violence",
-  covariate.labels = c(
-    "Formal education (years)",
-    "Age (years)",
-    "Urban (1/0)",
-    "Polygamous (1/0)",
-    "Muslim (1/0)",
-    "Christian (1/0)",
-    "Drank alcohol (1/0)",
-    "Wealth (1M TSh)"
-  ),
-  se = list(se_ols_1970),
-  digits = 3,
-  notes = "HC standard errors are reported in parentheses.",
-  notes.append = TRUE
-)
+iv_both <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                                       data = df_musoma)
+se_iv_both <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
 
 
-# === 2SLS for just the father's education IV
-iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+iv_father_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                    fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                   data = df)
-se_iv_father <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
+                   data = df_musoma)
+se_iv_father_1970 <- sqrt(diag(vcovHC(iv_musoma, type = "HC1")))
+
+iv_musoma_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                        affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                        data = df_musoma)
+se_iv_musoma_1970 <- sqrt(diag(vcovHC(iv_musoma_1970, type = "HC1")))
+
 
 stargazer(
-  iv_father,
+  ols_1970, iv_musoma_1970, iv_father_1970, iv_both,
   type = "text",
-  title = "Table 3: 2SLS Regression Results with Father's Education as IV",
+  title = "Table: OLS vs. 2SLS Results in Musoma Time Window",
   dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("OLS", "IV: Reform", "IV: Father's Educ", "IV: Both"),
   covariate.labels = c(
     "Formal education (years)",
     "Age (years)",
@@ -322,12 +284,32 @@ stargazer(
     "Drank alcohol (1/0)",
     "Wealth (1M TSh)"
   ),
-  se = list(se_iv_father),
+  se = list(se_ols_1970, se_iv_musoma_1970, se_iv_father_1970, se_iv_both),
   digits = 3,
-  notes = "HC standard errors are reported in parentheses.",
+  notes = "HC standard errors are reported in parentheses. All models restricted to the Musoma time window.",
   notes.append = TRUE
 )
 
-summary(iv_musoma, diagnostics = TRUE)
+summary(iv_both, diagnostics = TRUE)
+summary(iv_father_1970, diagnostics = TRUE)
+summary(iv_musoma_1970, diagnostics = TRUE)
 
-summary(lm(years_educ ~ fathers_educ_filled, data=df))
+
+# === Diagnostics
+
+# Quick fn to check the ICC within households.
+# Many of them are very high (is_urban, religion etc), so this shows why clustering was needed
+# These values are probably inflated by many clusters only having one member
+icc_check <- function(var, data) {
+  m <- lm(as.formula(paste(var, "~ 1")), data = data)
+  aov_fit <- aov(as.formula(paste(var, "~ factor(UPHI)")), data = data)
+  ss <- summary(aov_fit)[[1]]
+  between <- ss["factor(UPHI)", "Sum Sq"]
+  total <- between + ss["Residuals", "Sum Sq"]
+  between / total
+}
+
+vars <- c("years_educ", "age", "is_urban", "is_muslim", "is_christian", 
+          "is_polygamous", "drank_alcohol", "total_wealth")
+icc_results <- sapply(vars, icc_check, data = df)
+print(icc_results)
