@@ -90,6 +90,36 @@ df_learning_progress <- df_individual_education %>% filter(!is.na(years_educ)) %
                                                           .groups = "drop"
                                                     )
 
+# Track future education levels to test for self-selection
+df_education_progress <- df_individual_education %>% filter(!is.na(years_educ)) %>%
+                                                     group_by(UPI) %>%
+                                                     mutate(round1_educ = years_educ[round == 1][1]) %>%
+                                                     filter(!is.na(round1_educ)) %>%
+                                                     summarise(
+                                                        round1_educ = first(round1_educ),
+                                                        max_future_educ = suppressWarnings(max(years_educ[round > 1], na.rm = TRUE)),
+                                                        .groups = "drop"
+                                                     ) %>%
+                                                     mutate(max_future_educ = ifelse(is.infinite(max_future_educ), NA, max_future_educ)) %>%
+                                                     mutate(
+                                                        primary_school_will_attend_high_school = ifelse(
+                                                            round1_educ < 9,
+                                                            as.integer(!is.na(max_future_educ) & max_future_educ >= 9), NA
+                                                        ),
+                                                        primary_school_will_attend_higher_ed = ifelse(
+                                                            round1_educ < 9,
+                                                            as.integer(!is.na(max_future_educ) & max_future_educ >= 13), NA
+                                                        ),
+                                                        high_school_will_attend_higher_ed = ifelse(
+                                                            round1_educ >= 9 & round1_educ < 13,
+                                                            as.integer(!is.na(max_future_educ) & max_future_educ >= 13), NA
+                                                        )
+                                                    ) %>%
+                                                    select(UPI, primary_school_will_attend_high_school, 
+                                                    primary_school_will_attend_higher_ed, 
+                                                    high_school_will_attend_higher_ed)
+
+
 # Just write these as -1s to be dropped later
 df_personal_information$fathers_educ[is.na(df_personal_information$fathers_educ)] <- -1
 
@@ -174,6 +204,7 @@ df_individual_education <- df_individual_education %>% filter(!years_educ == 'NA
 
 # === Merge all of the CSVs together (on an individual level)
 df <- df_individual_education %>% left_join(df_learning_progress, by = "UPI") %>%
+                                  left_join(df_education_progress, by = "UPI") %>%
                                   left_join(df_views_on_violence, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_personal_information, by = c("round", "r_hhid", "r_id")) %>% 
                                   left_join(df_alcohol, by = c("round", "r_hhid", "r_id")) %>% 
@@ -230,7 +261,7 @@ df %>% summarise(min = min(.data[[col]]), mean = mean(.data[[col]]), max = max(.
 cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
           "is_christian", "is_polygamous", "drank_alcohol", "total_wealth")
 
-summary_stats <- df_musoma %>%
+summary_stats <- df %>%
   summarise(across(all_of(cols), list(min = min, mean = mean, max = max, sd = sd),
                    .names = "{.col}__{.fn}")) %>%
   pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
@@ -352,12 +383,12 @@ summary(iv_musoma_1970, diagnostics = TRUE)
 # More interesting interactions between education and IPV
 df <- df %>% mutate(high_school_level = years_educ >= 9 & years_educ < 13) %>%
              mutate(university_level = years_educ >= 13) %>%
-             mutate(years_educ_still_learning = years_educ * still_learning) %>%
+             mutate(years_educ_still_learning = years_educ * still_learning)
   
 
 iv_interaction <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning | 
-                     fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning,
-                   data = df)
+                        fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning,
+                        data = df)
 se_iv_interaction <- sqrt(diag(vcovCL(iv_interaction, cluster = ~ UPHI)))
 summary(iv_interaction, diagnostics = TRUE)
 
@@ -372,6 +403,31 @@ stargazer(
   keep = c("years_educ", "still_learning", "high_school_level", "university_level"),
   add.lines = list(c("Controls included?", "Yes")),
   se = list(se_iv_interaction),
+  digits = 3,
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
+
+
+# === Test the impact of future education levels
+df <- df %>% mutate(primary_school_will_attend_high_school = replace_na(primary_school_will_attend_high_school, 0)) %>%
+             mutate(primary_school_will_attend_higher_ed = replace_na(primary_school_will_attend_higher_ed, 0)) %>%
+             mutate(high_school_will_attend_higher_ed = replace_na(high_school_will_attend_higher_ed, 0))
+
+
+ols_future <- lm(supports_violence ~ high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
+se_ols_future <- sqrt(diag(vcovCL(ols_future, cluster = ~ UPHI)))
+summary(ols_future, diagnostics = TRUE)
+
+stargazer(
+  ols_future,
+  type = "text",
+  title = "OLS Results Using Future Education Values",
+  dep.var.labels = "Support of intimate partner violence",
+  covariate.labels = c("Highest grade high school", "Highest grade university", "Will attend high school", "Will attend higher ed"),
+  keep = c("high_school_level", "university_level", "primary_school_will_attend_high_school", "high_school_will_attend_higher_ed"),
+  add.lines = list(c("Controls included?", "Yes")),
+  se = list(se_ols_future),
   digits = 3,
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
