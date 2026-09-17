@@ -361,6 +361,11 @@ stargazer(
   notes.append = TRUE
 )
 
+linearHypothesis(
+  ols_complex_educ,
+  "university_level - 3 * run_high_school - high_school_level - high_school_will_attend_higher_ed = 0",
+  vcov. = vcovCL(ols_complex_educ, cluster = ~ UPHI)
+)
 
 
 
