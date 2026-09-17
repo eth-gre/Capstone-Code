@@ -4,7 +4,7 @@ library(stargazer)
 library(dplyr)
 library(sandwich)
 library(tidyr)
-
+library(car)
 
 
 # === Load the data across all CSVs
@@ -381,9 +381,9 @@ summary(iv_musoma_1970, diagnostics = TRUE)
 # === Panel data stuff
 
 # More interesting interactions between education and IPV
-df <- df %>% mutate(high_school_level = years_educ >= 9 & years_educ < 13) %>%
-             mutate(university_level = years_educ >= 13) %>%
-             mutate(years_educ_still_learning = years_educ * still_learning)
+df <- df %>% mutate(high_school_level = as.integer(years_educ >= 9 & years_educ < 13)) %>%
+             mutate(university_level = as.integer(years_educ >= 13)) %>%
+             mutate(years_educ_still_learning = as.integer(years_educ * still_learning))
   
 
 iv_interaction <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning | 
@@ -409,26 +409,55 @@ stargazer(
 )
 
 
-# === Test the impact of future education levels
-df <- df %>% mutate(primary_school_will_attend_high_school = replace_na(primary_school_will_attend_high_school, 0)) %>%
-             mutate(primary_school_will_attend_higher_ed = replace_na(primary_school_will_attend_higher_ed, 0)) %>%
-             mutate(high_school_will_attend_higher_ed = replace_na(high_school_will_attend_higher_ed, 0))
+# === Test the impact of future education levels on present IPV attitudes
+df <- df %>% mutate(primary_school_will_attend_high_school = as.integer(replace_na(primary_school_will_attend_high_school, 0))) %>%
+             mutate(primary_school_will_attend_higher_ed = as.integer(replace_na(primary_school_will_attend_higher_ed, 0))) %>%
+             mutate(high_school_will_attend_higher_ed = as.integer(replace_na(high_school_will_attend_higher_ed, 0)))
 
 
-ols_future <- lm(supports_violence ~ high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
+ols_future <- lm(supports_violence ~ years_educ + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
 se_ols_future <- sqrt(diag(vcovCL(ols_future, cluster = ~ UPHI)))
 summary(ols_future, diagnostics = TRUE)
 
+iv_future  <- ivreg(supports_violence ~ years_educ + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                          fathers_educ_filled + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                        data = df)
+se_iv_future <- sqrt(diag(vcovCL(iv_future , cluster = ~ UPHI)))
+summary(iv_future, diagnostics = TRUE)
+
 stargazer(
-  ols_future,
+  ols_future, iv_future,
   type = "text",
   title = "OLS Results Using Future Education Values",
   dep.var.labels = "Support of intimate partner violence",
-  covariate.labels = c("Highest grade high school", "Highest grade university", "Will attend high school", "Will attend higher ed"),
-  keep = c("high_school_level", "university_level", "primary_school_will_attend_high_school", "high_school_will_attend_higher_ed"),
+  column.labels = c("OLS", "IV: Father's Educ"),
+  covariate.labels = c("Years Educ", "Highest grade high school", "Highest grade university", "Will attend high school", "Will attend higher ed"),
+  keep = c("years_educ", "high_school_level", "university_level", "primary_school_will_attend_high_school", "high_school_will_attend_higher_ed"),
   add.lines = list(c("Controls included?", "Yes")),
-  se = list(se_ols_future),
+  se = list(se_ols_future, se_iv_future),
   digits = 3,
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
+
+# Quick test to see if these are the same (they are??)
+linearHypothesis(
+  ols_future,
+  "university_level + 4 * years_educ - high_school_level - high_school_will_attend_higher_ed = 0",
+  vcov. = vcovCL(ols_future, cluster = ~ UPHI)
+)
+
+linearHypothesis(
+  iv_future,
+  "university_level + 4 * years_educ - high_school_level - high_school_will_attend_higher_ed = 0",
+  vcov. = vcovCL(iv_future, cluster = ~ UPHI)
+)
+
+
+test <- df %>% filter(age < 18 & years_educ < 9)
+mean(test$years_educ)
+
+test_2 <- df %>% filter(age < 18 & years_educ >= 9 & years_educ < 13)
+mean(test_2$years_educ)
+
+       
