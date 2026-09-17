@@ -91,6 +91,7 @@ df_learning_progress <- df_individual_education %>% filter(!is.na(years_educ)) %
                                                     )
 
 # Track future education levels to test for self-selection
+# Don't test from primary --> secondary as min response age was 15 and it'd just be noise
 df_education_progress <- df_individual_education %>% filter(!is.na(years_educ)) %>%
                                                      group_by(UPI) %>%
                                                      mutate(round1_educ = years_educ[round == 1][1]) %>%
@@ -102,22 +103,14 @@ df_education_progress <- df_individual_education %>% filter(!is.na(years_educ)) 
                                                      ) %>%
                                                      mutate(max_future_educ = ifelse(is.infinite(max_future_educ), NA, max_future_educ)) %>%
                                                      mutate(
-                                                        primary_school_will_attend_high_school = ifelse(
-                                                            round1_educ < 9,
-                                                            as.integer(!is.na(max_future_educ) & max_future_educ >= 9), NA
-                                                        ),
-                                                        primary_school_will_attend_higher_ed = ifelse(
-                                                            round1_educ < 9,
-                                                            as.integer(!is.na(max_future_educ) & max_future_educ >= 13), NA
-                                                        ),
-                                                        high_school_will_attend_higher_ed = ifelse(
+                                                        high_school_will_attend_higher_ed = as.integer(ifelse(
                                                             round1_educ >= 9 & round1_educ < 13,
                                                             as.integer(!is.na(max_future_educ) & max_future_educ >= 13), NA
-                                                        )
+                                                        ))
                                                     ) %>%
-                                                    select(UPI, primary_school_will_attend_high_school, 
-                                                    primary_school_will_attend_higher_ed, 
-                                                    high_school_will_attend_higher_ed)
+                                                    select(UPI, high_school_will_attend_higher_ed)
+
+df_education_progress <- df_education_progress  %>% mutate(high_school_will_attend_higher_ed = as.integer(replace_na(high_school_will_attend_higher_ed, 0)))
 
 
 # Just write these as -1s to be dropped later
@@ -254,49 +247,7 @@ stargazer(
 )
 
 
-# === Summary stats
-col <- "supports_violence"
-df %>% summarise(min = min(.data[[col]]), mean = mean(.data[[col]]), max = max(.data[[col]]), sd = sd(.data[[col]]))
-
-cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
-          "is_christian", "is_polygamous", "drank_alcohol", "total_wealth")
-
-summary_stats <- df %>%
-  summarise(across(all_of(cols), list(min = min, mean = mean, max = max, sd = sd),
-                   .names = "{.col}__{.fn}")) %>%
-  pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
-               values_to = "value") %>%
-  pivot_wider(names_from = stat, values_from = value)
-
-print(summary_stats)
-
-
 # === IV and 2SLS analysis
-
-# This is the only one that runs across the entire period
-iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                          fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                        data = df)
-se_iv_father <- sqrt(diag(vcovCL(iv_father, cluster = ~ UPHI)))
-summary(iv_father, diagnostics = TRUE)
-
-
-stargazer(
-  iv_father,
-  type = "text",
-  title = "2SLS Results Across the Full Sample",
-  dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("IV: Father's Educ"),
-  covariate.labels = c("Formal education (years)"),
-  keep = c("years_educ"),
-  se = list(se_iv_father),
-  digits = 3,
-  add.lines = list(c("Controls included?", "Yes")),
-  notes = "Robust SEs are clustered on household.",
-  notes.append = TRUE
-)
-
-
 
 # Reform is the Musoma Resolution in 1974-1977 which made Universal Primary Education much more accessible
 # This was officially launched in 1977, we use this as an IV for education
@@ -307,157 +258,122 @@ YEAR_OF_SURVEY = 2008
 WINDOW = 3
 PRIMARY_SCHOOL_AGE = 7
 
-df_musoma <- df
-
 # Work out whether the reform affected them (starting school after)
 # Only look within a small window either side
-df_musoma <- df_musoma  %>% mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE)) %>%
-                            filter(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE - WINDOW) %>%
-                            filter(birth_year <= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE + WINDOW)
+df <- df %>% mutate(affected_by_reform = as.integer(birth_year >= YEAR_OF_REFORM - PRIMARY_SCHOOL_AGE))
 
-# We're gonna run 4 regressions in this time period, OLS, each IV, IVs together
-ols_1970 <- lm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df_musoma)
-se_ols_1970 <- sqrt(diag(vcovCL(ols_1970, cluster = ~ UPHI)))
+# We're gonna run 3 regressions in this time period, OLS, each IV, IVs together
+# 1. IV: father's educ
+# 2. IV: Musoma
+# 3. IV: Both
+iv_father <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                   fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                   data = df)
+se_iv_father <- sqrt(diag(vcovCL(iv_father, cluster = ~ UPHI)))
+
+iv_musoma <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                        affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                        data = df)
+se_iv_musoma <- sqrt(diag(vcovCL(iv_musoma, cluster = ~ UPHI)))
 
 iv_both <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                                       affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                                       data = df_musoma)
+                   affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                 data = df)
 se_iv_both <- sqrt(diag(vcovCL(iv_both, cluster = ~ UPHI)))
 
-
-iv_father_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                   fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                   data = df_musoma)
-se_iv_father_1970 <- sqrt(diag(vcovCL(iv_father_1970, cluster = ~ UPHI)))
-
-iv_musoma_1970 <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                        affected_by_reform + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                        data = df_musoma)
-se_iv_musoma_1970 <- sqrt(diag(vcovCL(iv_musoma_1970, cluster = ~ UPHI)))
-
-
 stargazer(
-  ols_1970, iv_musoma_1970, iv_father_1970, iv_both,
+  iv_father, iv_musoma, iv_both,
   type = "text",
-  title = "OLS and 2SLS Results in Musoma Time Window",
+  title = "2SLS Results for both IVs",
   dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("OLS", "IV: Reform", "IV: Father's Educ", "IV: Both"),
-  covariate.labels = c(
-    "Formal education (years)",
-    "Age (years)",
-    "Urban (1/0)",
-    "Polygamous (1/0)",
-    "Muslim (1/0)",
-    "Christian (1/0)",
-    "Drank alcohol (1/0)",
-    "Wealth (1M TSh)"
-  ),
-  se = list(se_ols_1970, se_iv_musoma_1970, se_iv_father_1970, se_iv_both),
-  digits = 3,
-  notes = "Robust SEs are clusterd on household.",
-  notes.append = TRUE
-)
-
-stargazer(
-  ols_1970, iv_musoma_1970, iv_father_1970, iv_both,
-  type = "text",
-  title = "OLS and 2SLS Results in Musoma Time Window",
-  dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("OLS", "IV: Reform", "IV: Father's Educ", "IV: Both"),
+  column.labels = c("IV: Father's Educ", "IV: Reform","IV: Both"),
   covariate.labels = c("Formal education (years)"),
   keep = c("years_educ"),
-  se = list(se_ols_1970, se_iv_musoma_1970, se_iv_father_1970, se_iv_both),
+  se = list(se_iv_father, se_iv_musoma, se_iv_both),
   digits = 3,
-  add.lines = list(c("Controls included?", c("Yes", "Yes", "Yes", "Yes"))),
+  add.lines = list(c("Controls included?", c("Yes", "Yes", "Yes"))),
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
 
 summary(iv_both, diagnostics = TRUE)
-summary(iv_father_1970, diagnostics = TRUE)
-summary(iv_musoma_1970, diagnostics = TRUE)
+summary(iv_father, diagnostics = TRUE)
+summary(iv_musoma, diagnostics = TRUE)
+
+# Also report the first stage result
+fs_father <- lm(years_educ ~ fathers_educ_filled + age + is_urban + is_polygamous + 
+                is_muslim + is_christian + drank_alcohol + total_wealth,
+                data = df)
+se_fs_father <- sqrt(diag(vcovCL(fs_father, cluster = ~ UPHI)))
+
+fs_musoma <- lm(years_educ ~ affected_by_reform + age + is_urban + is_polygamous + 
+                is_muslim + is_christian + drank_alcohol + total_wealth,
+                data = df)
+se_fs_musoma <- sqrt(diag(vcovCL(fs_musoma, cluster = ~ UPHI)))
+
+fs_both <- lm(years_educ ~ affected_by_reform + fathers_educ_filled + age + is_urban + 
+              is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+              data = df)
+se_fs_both <- sqrt(diag(vcovCL(fs_both, cluster = ~ UPHI)))
+
+stargazer(
+  fs_father, fs_musoma, fs_both,
+  type = "text",
+  title = "First-stage results",
+  dep.var.labels = "Years of formal education",
+  column.labels = c("IV: Father's Educ", "IV: Reform", "IV: Both"),
+  keep = c("fathers_educ_filled", "affected_by_reform"),
+  se = list(se_fs_father, se_fs_musoma, se_fs_both),
+  digits = 3,
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
 
 
 # === Panel data stuff
 
 # More interesting interactions between education and IPV
-df <- df %>% mutate(high_school_level = as.integer(years_educ >= 9 & years_educ < 13)) %>%
+df <- df %>% mutate(primary_school_level = as.integer(years_educ < 9)) %>%
+             mutate(high_school_level = as.integer(years_educ >= 9 & years_educ < 13)) %>%
              mutate(university_level = as.integer(years_educ >= 13)) %>%
-             mutate(years_educ_still_learning = as.integer(years_educ * still_learning))
-  
-
-iv_interaction <- ivreg(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning | 
-                        fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth + still_learning + high_school_level + university_level + years_educ_still_learning,
-                        data = df)
-se_iv_interaction <- sqrt(diag(vcovCL(iv_interaction, cluster = ~ UPHI)))
-summary(iv_interaction, diagnostics = TRUE)
-
-
-stargazer(
-  iv_interaction,
-  type = "text",
-  title = "2SLS Results Across the Full Sample",
-  dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("IV: Father's Educ"),
-  covariate.labels = c("Formal education (years)", "Still learning", "Highest grade high school", "Highest grade university"),
-  keep = c("years_educ", "still_learning", "high_school_level", "university_level"),
-  add.lines = list(c("Controls included?", "Yes")),
-  se = list(se_iv_interaction),
-  digits = 3,
-  notes = "Robust SEs are clustered on household.",
-  notes.append = TRUE
-)
+             mutate(primary_level = as.integer(years_educ >= 1 & years_educ < 9)) %>%
+             mutate(years_educ_still_learning = as.integer(years_educ * still_learning)) %>%
+             mutate(run_primary = years_educ * primary_school_level) %>%
+             mutate(run_high_school = (years_educ - 9) * high_school_level) %>%
+             mutate(run_university_level = (years_educ - 13) * university_level)
 
 
 # === Test the impact of future education levels on present IPV attitudes
-df <- df %>% mutate(primary_school_will_attend_high_school = as.integer(replace_na(primary_school_will_attend_high_school, 0))) %>%
-             mutate(primary_school_will_attend_higher_ed = as.integer(replace_na(primary_school_will_attend_higher_ed, 0))) %>%
-             mutate(high_school_will_attend_higher_ed = as.integer(replace_na(high_school_will_attend_higher_ed, 0)))
-
-
-ols_future <- lm(supports_violence ~ years_educ + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
-se_ols_future <- sqrt(diag(vcovCL(ols_future, cluster = ~ UPHI)))
-summary(ols_future, diagnostics = TRUE)
-
-iv_future  <- ivreg(supports_violence ~ years_educ + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
-                          fathers_educ_filled + high_school_level + university_level + primary_school_will_attend_high_school + high_school_will_attend_higher_ed + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
-                        data = df)
-se_iv_future <- sqrt(diag(vcovCL(iv_future , cluster = ~ UPHI)))
-summary(iv_future, diagnostics = TRUE)
+ols_complex_educ  <- lm(supports_violence ~ run_primary + high_school_level + run_high_school + university_level + run_university_level + high_school_will_attend_higher_ed + 
+                                            age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                                            data = df)
+se_complex_educ <- sqrt(diag(vcovCL(ols_complex_educ , cluster = ~ UPHI)))
 
 stargazer(
-  ols_future, iv_future,
+  ols_complex_educ,
   type = "text",
-  title = "OLS Results Using Future Education Values",
+  title = "OLS Results Decomposing Education Effects",
   dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("OLS", "IV: Father's Educ"),
-  covariate.labels = c("Years Educ", "Highest grade high school", "Highest grade university", "Will attend high school", "Will attend higher ed"),
-  keep = c("years_educ", "high_school_level", "university_level", "primary_school_will_attend_high_school", "high_school_will_attend_higher_ed"),
-  add.lines = list(c("Controls included?", "Yes")),
-  se = list(se_ols_future, se_iv_future),
+  keep = c("primary_school_level", "high_school_level", "university_level", "run_primary", "run_high_school", "run_university_level", "high_school_will_attend_higher_ed", "Constant"),
+  se = list(se_complex_educ),
   digits = 3,
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
 
-# Quick test to see if these are the same (they are??)
-linearHypothesis(
-  ols_future,
-  "university_level + 4 * years_educ - high_school_level - high_school_will_attend_higher_ed = 0",
-  vcov. = vcovCL(ols_future, cluster = ~ UPHI)
-)
-
-linearHypothesis(
-  iv_future,
-  "university_level + 4 * years_educ - high_school_level - high_school_will_attend_higher_ed = 0",
-  vcov. = vcovCL(iv_future, cluster = ~ UPHI)
-)
 
 
-test <- df %>% filter(age < 18 & years_educ < 9)
-mean(test$years_educ)
 
-test_2 <- df %>% filter(age < 18 & years_educ >= 9 & years_educ < 13)
-mean(test_2$years_educ)
+# === Summary stats
+cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
+          "is_christian", "is_polygamous", "drank_alcohol", "total_wealth", "fathers_educ_filled", "affected_by_reform",
+          "still_learning", "high_school_level", "university_level", "primary_level", "high_school_will_attend_higher_ed")
 
-       
+summary_stats <- df %>%
+  summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max),
+                   .names = "{.col}__{.fn}")) %>%
+  pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
+               values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+print(summary_stats)
