@@ -344,7 +344,7 @@ df <- df %>% mutate(primary_school_level = as.integer(years_educ < 9)) %>%
 
 
 # === Test the impact of future education levels on present IPV attitudes
-ols_complex_educ  <- lm(supports_violence ~ run_primary + high_school_level + run_high_school + university_level + run_university_level + high_school_will_attend_higher_ed + 
+ols_complex_educ  <- lm(supports_violence ~ run_primary + run_high_school + run_university_level + high_school_level  + university_level + high_school_will_attend_higher_ed + 
                                             age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                                             data = df)
 se_complex_educ <- sqrt(diag(vcovCL(ols_complex_educ , cluster = ~ UPHI)))
@@ -372,7 +372,9 @@ linearHypothesis(
 # === Summary stats
 cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
           "is_christian", "is_polygamous", "drank_alcohol", "total_wealth", "fathers_educ_filled", "affected_by_reform",
-          "still_learning", "high_school_level", "university_level", "primary_level", "high_school_will_attend_higher_ed")
+          "still_learning", "high_school_level", "university_level", "primary_level", "high_school_will_attend_higher_ed",
+          "run_high_school", "run_primary", "run_university_level"
+          )
 
 summary_stats <- df %>%
   summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max),
@@ -382,3 +384,122 @@ summary_stats <- df %>%
   pivot_wider(names_from = stat, values_from = value)
 
 print(summary_stats)
+
+
+
+
+
+
+## ============================================================
+## Support for IPV by Years of Education — publication-ready plot
+## ============================================================
+## Assumes `df` has:
+##   df$years_educ       -- numeric/integer years of schooling
+##   df$supports_violence -- binary (0/1) outcome
+## ============================================================
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+## ------------------------------------------------------------
+## 1. CUSTOMIZATION PANEL — change these and re-run
+## ------------------------------------------------------------
+point_color   <- "#2C3E50"   # color of the mean points/line
+ribbon_color  <- "#2C3E50"   # color of the CI error bars
+ribbon_alpha  <- 0.6         # transparency of error bars
+vline_color   <- "#2C3E50"   # color of the school-transition lines
+vline_alpha   <- 1
+n_label_color <- "#7F8C8D"   # color of the "n = ..." labels
+base_font_size <- 13
+point_size    <- 2.6
+line_size     <- 0.8
+
+## High school starts after 8 years, higher ed starts after 12 years
+hs_cutoff  <- 8.5
+he_cutoff  <- 12.5
+
+## Choose a theme — swap theme_minimal() for theme_bw(), theme_light(), etc.
+plot_theme <- theme_minimal(base_size = base_font_size)
+
+## ------------------------------------------------------------
+## 2. SUMMARIZE: mean, 95% CI (Wilson), and n per year group
+## ------------------------------------------------------------
+plot_data <- df %>%
+  filter(!is.na(years_educ), !is.na(supports_violence), years_educ > 0) %>% 
+  group_by(years_educ) %>%
+  summarise(
+    n     = n(),
+    mean  = mean(supports_violence),
+    successes = sum(supports_violence),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    ci = list(binom.test(successes, n)$conf.int),
+    ci_low  = ci[[1]],
+    ci_high = ci[[2]]
+  ) %>%
+  ungroup() %>%
+  select(-ci)
+
+## Position for n-labels: just above the upper CI bound
+label_offset <- 0.04
+plot_data <- plot_data %>%
+  mutate(n_label_y = ci_high + label_offset)
+
+## ------------------------------------------------------------
+## 3. PLOT
+## ------------------------------------------------------------
+p <- ggplot(plot_data, aes(x = years_educ, y = mean)) +
+  
+  # Vertical reference lines for schooling transitions
+  geom_vline(xintercept = hs_cutoff, linetype = "dashed",
+             color = vline_color, alpha = vline_alpha, linewidth = 0.6) +
+  geom_vline(xintercept = he_cutoff, linetype = "dashed",
+             color = vline_color, alpha = vline_alpha, linewidth = 0.6) +
+  
+  # CI error bars
+  geom_errorbar(aes(ymin = ci_low, ymax = ci_high),
+                width = 0.25, color = ribbon_color, alpha = ribbon_alpha,
+                linewidth = 0.6) +
+  
+  # Mean line + points
+  # geom_line(color = point_color, linewidth = line_size, alpha = 0.9) +
+  geom_point(color = point_color, size = point_size) +
+  
+  # Sample size labels
+  geom_text(aes(y = n_label_y, label = paste0(n)),
+            size = 3, color = n_label_color, vjust = 0) +
+  
+  # Annotate the schooling-transition lines near the top of the plot
+  annotate("text", x = hs_cutoff, y = Inf, label = "High school",
+           angle = 90, vjust = 1.4, hjust = 1.1, size = 3.2,
+           color = vline_color) +
+  annotate("text", x = he_cutoff, y = Inf, label = "Higher ed.",
+           angle = 90, vjust = 1.4, hjust = 1.1, size = 3.2,
+           color = vline_color) +
+  
+  scale_x_continuous(breaks = sort(unique(plot_data$years_educ))) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     expand = expansion(mult = c(0.05, 0.12))) +
+  
+  labs(
+    x = "Years of education",
+    y = "Supports IPV share"
+  ) +
+  
+  plot_theme +
+  theme(
+    panel.grid.minor   = element_blank(),
+    panel.grid.major.x = element_blank(),
+    axis.title         = element_text(face = "bold"),
+    axis.text          = element_text(color = "black")
+  )
+
+print(p)
+
+## ------------------------------------------------------------
+## 4. SAVE (optional)
+## ------------------------------------------------------------
+ggsave("educ_violence_plot.png", p, width = 8, height = 5.5, dpi = 300)
