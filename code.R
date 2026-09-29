@@ -432,5 +432,20 @@ print(summary_stats)
 
 
 
+# === Extension 1: Logistic regression
+logit = glm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+          data=df,
+          family = binomial(link = "logit"))
 
+se_logit <- sqrt(diag(vcovCL(logit, cluster = ~ UPHI)))
 
+stargazer(
+  logit,
+  type = "text",
+  title = "Logit Results",
+  dep.var.labels = "Support of intimate partner violence",
+  se = list(se_logit),
+  digits = 3,
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
