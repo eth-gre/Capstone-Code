@@ -47,7 +47,9 @@ df_religion$r_hhid <- as.character(df_religion$r_hhid)
 # === Create derived columns
 
 # They 'support' violence if they answer yes to ANY of the questions
-df_views_on_violence <- df_views_on_violence %>% mutate(supports_violence = as.integer(if_any(c(hy_02_a, hy_02_b, hy_02_c, hy_02_d, hy_02_e, hy_02_f, hy_02_g, hy_02_h), ~ .x == ' YES')))
+df_views_on_violence <- df_views_on_violence %>% mutate(supports_violence = as.integer(if_any(c(hy_02_a, hy_02_b, hy_02_c, hy_02_d, hy_02_e, hy_02_f, hy_02_g, hy_02_h), ~ .x == ' YES'))) %>%
+                                                 mutate(supports_violence_sum = rowSums(across(c(hy_02_a, hy_02_b, hy_02_c, hy_02_d, hy_02_e, hy_02_f, hy_02_g, hy_02_h), ~ .x == " YES")))
+
 
 # Education is provided as a label and must be converted to years for the regression
 # Many of them are a lil bit ambiguous, soooo sorry to anyone who did a diploma??
@@ -376,12 +378,9 @@ cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim",
           "run_high_school", "run_primary", "run_university_level"
           )
 
-summary_stats <- df %>%
-  summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max),
-                   .names = "{.col}__{.fn}")) %>%
-  pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__",
-               values_to = "value") %>%
-  pivot_wider(names_from = stat, values_from = value)
+summary_stats <- df %>% summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max), .names = "{.col}__{.fn}")) %>%
+                        pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__", values_to = "value") %>%
+                        pivot_wider(names_from = stat, values_from = value)
 
 print(summary_stats)
 
@@ -502,4 +501,4 @@ print(p)
 ## ------------------------------------------------------------
 ## 4. SAVE (optional)
 ## ------------------------------------------------------------
-ggsave("educ_violence_plot.png", p, width = 8, height = 5.5, dpi = 300)
+# ggsave("educ_violence_plot.png", p, width = 8, height = 5.5, dpi = 300)
