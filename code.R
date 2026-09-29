@@ -332,7 +332,53 @@ stargazer(
 )
 
 
-# === Panel data stuff
+
+# === Robustness Check 1: Alternative calculation of supports_ipv (summation)
+iv_both_sum <- ivreg(supports_violence_sum ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
+                     affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                     data = df)
+se_iv_both_sum <- sqrt(diag(vcovCL(iv_both_sum, cluster = ~ UPHI)))
+
+stargazer(
+  iv_both_sum,
+  type = "text",
+  title = "2SLS Results when IPV is summed",
+  dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("IV: Both"),
+  covariate.labels = c("Formal education (years)"),
+  keep = c("years_educ"),
+  se = list(se_iv_both_sum),
+  digits = 3,
+  add.lines = list(c("Controls included?", c("Yes"))),
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
+
+summary(iv_both_sum, diagnostics = TRUE)
+
+
+# Try with just OLS instead
+ols_both_sum <- lm(supports_violence_sum ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
+se_ols_both_sum <- sqrt(diag(vcovCL(ols_both_sum, cluster = ~ UPHI)))
+
+stargazer(
+  ols_both_sum,
+  type = "text",
+  title = "OLS Results when IPV is summed",
+  dep.var.labels = "Support of intimate partner violence",
+  column.labels = c("OLS"),
+  covariate.labels = c("Formal education (years)"),
+  keep = c("years_educ"),
+  se = list(se_ols_both_sum),
+  digits = 3,
+  add.lines = list(c("Controls included?", c("Yes"))),
+  notes = "Robust SEs are clustered on household.",
+  notes.append = TRUE
+)
+
+
+
+# === Robustness Check 2: Decomposition of education
 
 # More interesting interactions between education and IPV
 df <- df %>% mutate(primary_school_level = as.integer(years_educ < 9)) %>%
