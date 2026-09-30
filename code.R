@@ -5,7 +5,10 @@ library(dplyr)
 library(sandwich)
 library(tidyr)
 library(car)
+library(marginaleffects)
+library(logistf)
 
+install.packages("logistf")
 
 # === Load the data across all CSVs
 
@@ -333,23 +336,29 @@ stargazer(
 
 
 
+
+
+
 # === Robustness Check 1: Alternative calculation of supports_ipv (summation)
+ols_both_sum <- ivreg(supports_violence_sum ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
+se_ols_both_sum <- sqrt(diag(vcovCL(ols_both_sum, cluster = ~ UPHI)))
+
 iv_both_sum <- ivreg(supports_violence_sum ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth | 
                      affected_by_reform + fathers_educ_filled + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
                      data = df)
 se_iv_both_sum <- sqrt(diag(vcovCL(iv_both_sum, cluster = ~ UPHI)))
 
 stargazer(
-  iv_both_sum,
+  ols_both_sum, iv_both_sum,
   type = "text",
-  title = "2SLS Results when IPV is summed",
+  title = "OLS and 2SLS Results when IPV is summed",
   dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("IV: Both"),
+  column.labels = c("OLS", "IV: Both"),
   covariate.labels = c("Formal education (years)"),
   keep = c("years_educ"),
-  se = list(se_iv_both_sum),
+  se = list(se_ols_both_sum, se_iv_both_sum),
   digits = 3,
-  add.lines = list(c("Controls included?", c("Yes"))),
+  add.lines = list(c("Controls included?", c("Yes", "Yes"))),
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
@@ -357,24 +366,7 @@ stargazer(
 summary(iv_both_sum, diagnostics = TRUE)
 
 
-# Try with just OLS instead
-ols_both_sum <- lm(supports_violence_sum ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth, data = df)
-se_ols_both_sum <- sqrt(diag(vcovCL(ols_both_sum, cluster = ~ UPHI)))
 
-stargazer(
-  ols_both_sum,
-  type = "text",
-  title = "OLS Results when IPV is summed",
-  dep.var.labels = "Support of intimate partner violence",
-  column.labels = c("OLS"),
-  covariate.labels = c("Formal education (years)"),
-  keep = c("years_educ"),
-  se = list(se_ols_both_sum),
-  digits = 3,
-  add.lines = list(c("Controls included?", c("Yes"))),
-  notes = "Robust SEs are clustered on household.",
-  notes.append = TRUE
-)
 
 
 
@@ -405,6 +397,7 @@ stargazer(
   keep = c("primary_school_level", "high_school_level", "university_level", "run_primary", "run_high_school", "run_university_level", "high_school_will_attend_higher_ed", "Constant"),
   se = list(se_complex_educ),
   digits = 3,
+  add.lines = list(c("Controls included?", c("Yes"))),
   notes = "Robust SEs are clustered on household.",
   notes.append = TRUE
 )
@@ -417,35 +410,77 @@ linearHypothesis(
 
 
 
-# === Summary stats
-cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
-          "is_christian", "is_polygamous", "drank_alcohol", "total_wealth", "fathers_educ_filled", "affected_by_reform",
-          "still_learning", "high_school_level", "university_level", "primary_level", "high_school_will_attend_higher_ed",
-          "run_high_school", "run_primary", "run_university_level"
-          )
-
-summary_stats <- df %>% summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max), .names = "{.col}__{.fn}")) %>%
-                        pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__", values_to = "value") %>%
-                        pivot_wider(names_from = stat, values_from = value)
-
-print(summary_stats)
 
 
+# === Robustness check 3: Logistic regression
 
-# === Extension 1: Logistic regression
+# Do the standard model
 logit = glm(supports_violence ~ years_educ + age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
           data=df,
           family = binomial(link = "logit"))
 
 se_logit <- sqrt(diag(vcovCL(logit, cluster = ~ UPHI)))
 
+
+# And the fun interaction one
+logit_complex_educ  <- glm(supports_violence ~ run_primary + run_high_school + run_university_level + high_school_level  + university_level + high_school_will_attend_higher_ed + 
+                          age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                          data = df,
+                          family = binomial(link = "logit"))
+
+se_logit_complex_educ <- sqrt(diag(vcovCL(logit_complex_educ, cluster = ~ UPHI)))
+
+
+# Also do another version with Firth's method to penalise the small sample issues with higher ed
+logit_complex_educ_firth  <- logistf(supports_violence ~ run_primary + run_high_school + run_university_level + high_school_level  + university_level + high_school_will_attend_higher_ed + 
+                               age + is_urban + is_polygamous + is_muslim + is_christian + drank_alcohol + total_wealth,
+                               data = df,
+                               firth = TRUE,
+                               pl = TRUE)
+
+# NOTE: this is NOT clustered on household!!! idk how to make it cluster
+# this is jsut a robustness check for the coeff magnitude so it shouldnt matter
+se_logit_complex_educ_firth <- sqrt(diag(vcov(logit_complex_educ_firth)))
+
+# Also need to make stargazer happy with the object it gets
+firth_shell <- glm(formula(logit_complex_educ_firth), data = df, family = binomial("logit"))
+
+
 stargazer(
-  logit,
+  logit, logit_complex_educ, firth_shell,
   type = "text",
-  title = "Logit Results",
+  title = "Logit Results for simple and complex education regressions",
   dep.var.labels = "Support of intimate partner violence",
-  se = list(se_logit),
+  column.labels = c("Logit", "Logit", "Firth"),
+  keep = c("years_educ", "run_primary", "run_high_school", "run_university_level", "high_school_level", "university_level", "high_school_will_attend_higher_ed"),
+  coef = list(NULL, NULL, coef(logit_complex_educ_firth)),
+  se   = list(se_logit, se_logit_complex_educ, se_logit_complex_educ_firth),
+  add.lines = list(c("Controls included?", "Yes", "Yes", "Yes")),
   digits = 3,
-  notes = "Robust SEs are clustered on household.",
+  notes = c("Robust SEs are clustered on household in columns (1)-(2).",
+            "Column (3) is Firth penalized logit with Wald SEs, not clustered."),
   notes.append = TRUE
 )
+
+print(avg_slopes(logit, variables = "years_educ", vcov = ~UPHI))
+
+
+
+# === Summary stats
+cols <- c("supports_violence", "years_educ", "age", "is_urban", "is_muslim", 
+          "is_christian", "is_polygamous", "drank_alcohol", "total_wealth", "fathers_educ_filled", "affected_by_reform",
+          "still_learning", "high_school_level", "university_level", "primary_level", "high_school_will_attend_higher_ed",
+          "run_high_school", "run_primary", "run_university_level", "supports_violence_sum"
+)
+
+summary_stats <- df_x %>% summarise(across(all_of(cols), list(mean = mean, sd = sd, min = min, max = max), .names = "{.col}__{.fn}")) %>%
+  pivot_longer(everything(), names_to = c("col", "stat"), names_sep = "__", values_to = "value") %>%
+  pivot_wider(names_from = stat, values_from = value)
+
+print(summary_stats)
+
+
+
+# === Experiments
+df_x <- df %>% filter(supports_violence_sum > 0)
+
